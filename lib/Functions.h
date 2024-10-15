@@ -1,136 +1,534 @@
+#pragma once
 #include <iostream>
-#include <vector>
-#include <algorithm>
-#include <map>
 
-template<typename, typename = void>
-struct has_iterator : std::false_type {
+
+template<typename Iterator>
+concept BidirectionalIterator = requires(Iterator it) {
+    { *it };
+    { ++it };
+    { it++ };
+    { --it };
+    { it-- };
 };
 
-template<typename T>
-struct has_iterator<T, void> : std::true_type {
+template<typename Range>
+concept HasBidirectionalIterator = requires(Range range) {
+    { range.begin() } -> BidirectionalIterator;
+    { range.end() } -> BidirectionalIterator;
 };
 
-template<typename, typename = void>
-struct has_const_iterator : std::false_type {
-};
-
-template<typename T>
-struct has_const_iterator<T, void> : std::true_type {
-}; //Tag dispatch idiom
 
 template<typename Container>
-struct ContainerTraits {
-    static_assert(has_iterator<Container>::value, "ERROR. NO ITERATOR");
-    static_assert(has_const_iterator<Container>::value, "ERROR. NO CONST ITERATOR");
+concept HasKey = requires(Container container) {
+    { container.begin()->first };
 };
 
-template<typename Container, typename Predicate>
-auto transformFunc(Container &&container, Predicate &&pred) {
-    using ValueType = typename std::decay_t<Container>::value_type;
-    std::vector<ValueType> result;
-    for (auto &item: container) {
-        result.push_back(pred(item));
-    }
-    return result;
-}
+template<typename Container>
+concept HasValue = requires(Container container) {
+    { container.begin()->second };
+};
 
-template<typename Predicate>
-auto transform(Predicate &&pred) {
-    return [pred](auto &&container) {
-        ContainerTraits<std::decay_t<decltype(container)>>();
+//transform - изменяют значения элементов наподобие того как это делает алгоритм transform
+//filter - фильтрация по определенному признаку, признак передается в качестве аргумента
+//take - берет только N первых элементов
+//drop - пропускаем N первых элементов
+//reverse - реверсия
+//keys - ключи для ассоциативных контейнеров
+//values - значения для ассоциативных контейнеров
 
-        return transformFunc(std::forward<decltype(container)>(container), pred);
-    };
-}
+template<typename InputIterator, typename Func>
+class TransformedRange {
+    //transform - изменяют значения элементов наподобие того как это делает алгоритм transform
+public:
+    TransformedRange(InputIterator begin, InputIterator end, Func function)
+            : begin_(begin)
+            , end_(end)
+            , function_(function)
+    {}
 
-template<typename Container, typename Predicate>
-auto filterFunc(Container &&container, Predicate &&pred) {
-    using ValueType = typename std::decay_t<Container>::value_type;
-    std::vector<ValueType> result;
-    for (auto &item: container) {
-        if (pred(item)) {
-            result.push_back(item);
+    class Iterator {
+    public:
+        Iterator(InputIterator current, Func function)
+                : current_(current)
+                , function_(function)
+        {}
+
+        Iterator& operator++() {
+            ++current_;
+            return *this;
         }
-    }
 
-    return result;
-}
+        Iterator operator++(int) {
+            auto tmp = *this;
+            ++current_;
+            return tmp;
+        }
 
-template<typename Predicate>
-auto filter(Predicate &&pred) {
-    return [pred](auto &&container) {
-        ContainerTraits<std::decay_t<decltype(container)>>();
+        Iterator& operator--() {
+            --current_;
+            return *this;
+        }
 
-        return filterFunc(std::forward<decltype(container)>(container), pred);
+        Iterator operator--(int) {
+            auto tmp = *this;
+            --current_;
+            return tmp;
+        }
+
+        bool operator!=(const Iterator &other) const {
+            return current_ != other.current_;
+        }
+
+        auto operator*() const {
+            return function_(*current_);
+        }
+
+    private:
+        InputIterator current_;
+        Func function_;
     };
-}
 
-template<typename Container>
-auto take(Container &&container, std::size_t n) {
-    ContainerTraits<std::decay_t<Container>>();
-    using ValueType = typename std::decay_t<Container>::value_type;
-    std::vector<ValueType> result;
-    auto it = std::begin(container);
-    for (std::size_t i = 0; i < n && it != std::end(container); ++i, ++it) {
-        result.push_back(*it);
+    Iterator begin() const {
+        return Iterator(begin_, function_);
     }
 
-    return result;
-}
-
-template<typename Container>
-auto drop(Container &&container, std::size_t n) {
-    ContainerTraits<std::decay_t<Container>>();
-    using ValueType = typename std::decay_t<Container>::value_type;
-    std::vector<ValueType> result;
-    auto it = std::begin(container);
-    if(n>container.size()){
-        return result;
-    }
-    std::advance(it, n);
-    for (; it != std::end(container); ++it) {
-        result.push_back(*it);
+    Iterator end() const {
+        return Iterator(end_, function_);
     }
 
-    return result;
-}
+private:
+    InputIterator begin_;
+    InputIterator end_;
+    Func function_;
+};
 
-template<typename Container>
-auto reverse(Container &&container) {
-    ContainerTraits<std::decay_t<Container>>();
-    using ValueType = typename std::decay_t<Container>::value_type;
-    std::vector<ValueType> result(std::rbegin(container), std::rend(container));
 
-    return result;
-}
+template<typename InputIterator, typename Predicate>
+class FilteredRange {
+    //filter - фильтрация по определенному признаку, признак передается в качестве аргумента
+public:
+    FilteredRange(InputIterator begin, InputIterator end, Predicate predicate)
+            : begin_(begin)
+            , end_(end)
+            , predicate_(predicate)
+    {}
 
-template<typename Map>
-auto keys(Map &&map) {
-    ContainerTraits<std::decay_t<Map>>();
-    using KeyType = typename std::decay_t<Map>::key_type;
-    std::vector<KeyType> result;
-    for (const auto &pair: map) {
-        result.push_back(pair.first);
+    class Iterator {
+    private:
+        InputIterator current_;
+        InputIterator end_;
+        Predicate predicate_;
+
+    public:
+        Iterator(InputIterator current, InputIterator end, Predicate predicate)
+                : current_(current)
+                , end_(end)
+                , predicate_(predicate) {
+            next();
+        }
+
+        Iterator& operator++() {
+            ++current_;
+            next();
+            return *this;
+        }
+
+        Iterator operator++(int) {
+            auto tmp = *this;
+            ++current_;
+            next();
+            return tmp;
+        }
+
+        Iterator& operator--() {
+            --current_;
+            prev();
+            return *this;
+        }
+
+        Iterator operator--(int) {
+            auto tmp = *this;
+            --current_;
+            prev();
+            return tmp;
+        }
+
+        bool operator!=(const Iterator& other) const {
+            return current_ != other.current_;
+        }
+
+        auto operator*() const {
+            return *current_;
+        }
+
+    private:
+        void next() {
+            while (current_ != end_ && !predicate_(*current_)) {
+                ++current_;
+            }
+        }
+
+        void prev() {
+            while (current_ != end_ && !predicate_(*current_)) {
+                --current_;
+            }
+        }
+    };
+
+    Iterator begin() const {
+        return Iterator(begin_, end_, predicate_);
     }
 
-    return result;
-}
-
-template<typename Map>
-auto values(Map &&map) {
-    ContainerTraits<std::decay_t<Map>>();
-    using ValueType = typename std::decay_t<Map>::mapped_type;
-    std::vector<ValueType> result;
-    for (const auto &pair: map) {
-        result.push_back(pair.second);
+    Iterator end() const {
+        return Iterator(end_, end_, predicate_);
     }
 
-    return result;
+private:
+    InputIterator begin_;
+    InputIterator end_;
+    Predicate predicate_;
+};
+
+
+template<typename InputIterator>
+class BasicRange {
+    //take - берет только N первых элементов
+    //drop - пропускаем N первых элементов
+public:
+    BasicRange(InputIterator begin, InputIterator end)
+            : begin_(begin)
+            , end_(end)
+    {}
+
+    class Iterator {
+    public:
+        Iterator(InputIterator current)
+                : current_(current) {}
+
+        Iterator& operator++() {
+            ++current_;
+            return *this;
+        }
+
+        Iterator operator++(int) {
+            auto tmp = *this;
+            ++current_;
+            return tmp;
+        }
+
+        Iterator& operator--() {
+            --current_;
+            return *this;
+        }
+
+        Iterator operator--(int) {
+            auto tmp = *this;
+            --current_;
+            return tmp;
+        }
+
+        bool operator!=(const Iterator &other) const {
+            return current_ != other.current_;
+        }
+
+        auto operator*() const {
+            return *current_;
+        }
+
+    private:
+        InputIterator current_;
+    };
+
+    Iterator begin() const {
+        return Iterator(begin_);
+    }
+
+    Iterator end() const {
+        return Iterator(end_);
+    }
+
+private:
+    InputIterator begin_;
+    InputIterator end_;
+};
+
+
+template<typename InputIterator>
+class ReverseRange {
+public:
+    ReverseRange(InputIterator begin, InputIterator end)
+            : begin_(begin)
+            , end_(end)
+    {}
+
+    class Iterator {
+    public:
+        Iterator(InputIterator current)
+                : current_(current) {}
+
+        Iterator& operator++() {
+            --current_;
+            return *this;
+        }
+
+        Iterator operator++(int) {
+            auto tmp = *this;
+            --current_;
+            return tmp;
+        }
+
+        Iterator& operator--() {
+            ++current_;
+            return *this;
+        }
+
+        Iterator operator--(int) {
+            auto tmp = *this;
+            ++current_;
+            return tmp;
+        }
+
+        bool operator!=(const Iterator &other) const {
+            return current_ != other.current_;
+        }
+
+        auto operator*() const {
+            return *current_;
+        }
+
+    private:
+        InputIterator current_;
+    };
+
+    Iterator begin() const {
+        return Iterator(begin_);
+    }
+
+    Iterator end() const {
+        return Iterator(end_);
+    }
+
+private:
+    InputIterator begin_;
+    InputIterator end_;
+};
+
+
+template<typename InputIterator>
+class KeysRange {
+public:
+    KeysRange(InputIterator begin, InputIterator end)
+            : begin_(begin)
+            , end_(end)
+    {}
+
+    class Iterator {
+    public:
+        Iterator(InputIterator iter) : current_(iter) {}
+
+        Iterator& operator++() {
+            ++current_;
+            return *this;
+        }
+
+        Iterator operator++(int) {
+            Iterator tmp = *this;
+            ++current_;
+            return tmp;
+        }
+
+        Iterator& operator--() {
+            --current_;
+            return *this;
+        }
+
+        Iterator operator--(int) {
+            Iterator tmp = *this;
+            --current_;
+            return tmp;
+        }
+
+        bool operator!=(const Iterator& other) const {
+            return current_ != other.current_;
+        }
+
+        const auto& operator*() const {
+            return current_->first;
+        }
+
+    private:
+        InputIterator current_;
+    };
+
+    Iterator begin() const {
+        return Iterator(begin_);
+    }
+
+    Iterator end() const {
+        return Iterator(end_);
+    }
+
+private:
+    InputIterator begin_;
+    InputIterator end_;
+};
+
+
+
+
+template<typename InputIterator>
+class ValuesRange {
+public:
+    ValuesRange(InputIterator begin, InputIterator end)
+            : begin_(begin)
+            , end_(end)
+    {}
+
+    class Iterator {
+    public:
+        Iterator(InputIterator current) : current_(current) {}
+
+        Iterator& operator++() {
+            ++current_;
+            return *this;
+        }
+
+        Iterator operator++(int) {
+            Iterator tmp = *this;
+            ++current_;
+            return tmp;
+        }
+
+        Iterator& operator--() {
+            --current_;
+            return *this;
+        }
+
+        Iterator operator--(int) {
+            Iterator tmp = *this;
+            --current_;
+            return tmp;
+        }
+
+        bool operator!=(const Iterator& other) const {
+            return current_ != other.current_;
+        }
+
+        const auto& operator*() const {
+            return current_->second;
+        }
+
+    private:
+        InputIterator current_;
+    };
+
+    Iterator begin() const {
+        return Iterator(begin_);
+    }
+
+    Iterator end() const {
+        return Iterator(end_);
+    }
+
+private:
+    InputIterator begin_;
+    InputIterator end_;
+};
+
+
+template<typename Func>
+struct my_transform {
+    Func function;
+    my_transform(Func func) : function(func) {}
+};
+
+
+template<typename Func>
+struct my_filter {
+    Func predicate;
+    my_filter(Func func) : predicate(func) {}
+};
+
+
+struct my_take {
+    size_t count;
+    my_take(size_t count) : count(count) {}
+};
+
+
+struct my_drop {
+    size_t count;
+    my_drop(size_t count) : count(count) {}
+};
+
+
+struct my_reverse {
+    my_reverse() = default;
+};
+
+
+struct my_values {
+    my_values() = default;
+};
+
+
+struct my_keys {
+    my_keys() = default;
+};
+
+//transform
+template<typename InputRange, typename Func>
+requires HasBidirectionalIterator<InputRange>
+auto operator|(const InputRange& range, const my_transform<Func>& transform) {
+    return TransformedRange(range.begin(), range.end(), transform.function);
 }
 
-template<typename Container, typename Func>
-auto operator|(Container &&container, Func &&func) -> decltype(func(std::declval<Container>())) {
+//filter
+template<typename InputRange, typename Func>
+requires HasBidirectionalIterator<InputRange>
+auto operator|(const InputRange& range, const my_filter<Func>& filter) {
+    return FilteredRange(range.begin(), range.end(), filter.predicate);
+}
 
-    return func(std::forward<Container>(container));
+//take
+template<typename InputRange>
+requires HasBidirectionalIterator<InputRange>
+auto operator|(const InputRange& range, const my_take& take) {
+    auto new_end = range.begin();
+    for (size_t i = 0; i < take.count && new_end != range.end(); ++i) {
+        ++new_end;
+    }
+    return BasicRange(range.begin(), new_end);
+}
+
+//drop
+template<typename InputRange>
+auto operator|(const InputRange& range, const my_drop& drop) {
+    auto new_begin = range.begin();
+    for (size_t i = 0; i < drop.count && new_begin != range.end(); ++i) {
+        ++new_begin;
+    }
+    return BasicRange(new_begin, range.end());
+}
+
+//reverse
+template<typename InputRange>
+requires HasBidirectionalIterator<InputRange>
+auto operator|(const InputRange& range, const my_reverse& reverse) {
+    return ReverseRange(--range.end(), --range.begin());
+}
+
+//keys
+template<typename InputRange>
+requires HasBidirectionalIterator<InputRange> && HasKey<InputRange>
+auto operator|(const InputRange& range, const my_keys& k) {
+    return KeysRange(range.begin(), range.end());
+}
+
+
+//values
+template<typename InputRange>
+requires HasBidirectionalIterator<InputRange> && HasValue<InputRange>
+auto operator|(const InputRange& range, const my_values& v) {
+    return ValuesRange(range.begin(), range.end());
 }
